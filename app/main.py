@@ -1,106 +1,112 @@
 import os
 import uuid
-import boto3
 import io
-from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, Form
-from fastapi.responses import JSONResponse
-from pymilvus import connections, utility, Collection, FieldSchema, CollectionSchema, DataType
-from sentence_transformers import SentenceTransformer
+import boto3
+from typing import List, Optional
 
-# Load environment variables from .env file
+from dotenv import load_dotenv
+from fastapi import FastAPI, UploadFile, Form, HTTPException, Body
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from sentence_transformers import SentenceTransformer
+from pymilvus import connections, utility, Collection, FieldSchema, CollectionSchema, DataType
+
+# === LLM backends ===
+USE_OPENAI = os.getenv("USE_OPENAI", "false").lower() == "true"
+if USE_OPENAI:
+    from openai import OpenAI
+else:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+
+# -----------------------
+# Environment / Config
+# -----------------------
 load_dotenv()
 
-# --- Configuration ---
-# Use a flag to easily switch between Zilliz Cloud and a local Milvus instance
 USE_ZILLIZ = os.getenv("USE_ZILLIZ", "false").lower() == "true"
-
-# Zilliz Cloud configs
 ZILLIZ_URI = os.getenv("ZILLIZ_URI")
 ZILLIZ_API_KEY = os.getenv("ZILLIZ_API_KEY")
 
-# Local Milvus configs
 MILVUS_HOST = os.getenv("MILVUS_HOST", "localhost")
 MILVUS_PORT = os.getenv("MILVUS_PORT", "19530")
 
-# Common configs
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "documents")
-DIMENSION = 384  # Dimension of the "all-MiniLM-L6-v2" model
+DIMENSION = 384  # all-MiniLM-L6-v2
 
-# AWS configs
+# AWS
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 S3_BUCKET = os.getenv("S3_BUCKET")
 
-# --- Database Connection ---
-print("Connecting to vector database...")
+# LLM
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Meta-Llama-3-8B-Instruct")
+HF_DEVICE = os.getenv("HF_DEVICE", "auto")
+MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "512"))
+TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+
+TOP_K_DEFAULT = int(os.getenv("TOP_K", "3"))
+
+# -----------------------
+# FastAPI setup
+# -----------------------
+app = FastAPI(title="Semantic Search + RAG Chatbot API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
+)
+
+# -----------------------
+# Vector DB connection
+# -----------------------
+print("Connecting to vector DB...")
 if USE_ZILLIZ:
-    if not ZILLIZ_URI or not ZILLIZ_API_KEY:
-        raise ValueError("ZILLIZ_URI and ZILLIZ_API_KEY must be set in .env when USE_ZILLIZ is true")
-    connections.connect(
-        alias="default",
-        uri=ZILLIZ_URI,
-        token=ZILLIZ_API_KEY,
-    )
-    print("Connected to Zilliz Cloud.")
+    connections.connect(alias="default", uri=ZILLIZ_URI, token=ZILLIZ_API_KEY)
+    print("Connected to Zilliz.")
 else:
-    connections.connect(
-        alias="default",
-        host=MILVUS_HOST,
-        port=MILVUS_PORT,
-    )
-    print(f"Connected to local Milvus at {MILVUS_HOST}:{MILVUS_PORT}.")
+    connections.connect(alias="default", host=MILVUS_HOST, port=MILVUS_PORT)
+    print(f"Connected to Milvus at {MILVUS_HOST}:{MILVUS_PORT}")
 
-# --- Model Loading ---
-print("Loading sentence transformer model...")
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-print("Model loaded.")
+# -----------------------
+# Embedding model
+# -----------------------
+print("Loading embeddings model...")
+embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-# --- Milvus Collection and Index Setup ---
+# -----------------------
+# Collection schema
+# -----------------------
 fields = [
     FieldSchema(name="id", dtype=DataType.VARCHAR, is_primary=True, max_length=64, auto_id=False),
     FieldSchema(name="title", dtype=DataType.VARCHAR, max_length=512),
     FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=8192),
     FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=DIMENSION),
-    FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=64),   # NEW
+    FieldSchema(name="session_id", dtype=DataType.VARCHAR, max_length=64),
 ]
-schema = CollectionSchema(fields, description="Document collection for semantic search")
+schema = CollectionSchema(fields, description="Docs for semantic search & RAG")
 
-
-# Create collection if it doesn't exist
 if not utility.has_collection(COLLECTION_NAME):
-    print(f"Collection '{COLLECTION_NAME}' does not exist. Creating now...")
-    collection = Collection(name=COLLECTION_NAME, schema=schema, using='default')
-    print("Collection created.")
+    collection = Collection(name=COLLECTION_NAME, schema=schema, using="default")
 else:
-    print(f"Using existing collection '{COLLECTION_NAME}'.")
-    collection = Collection(name=COLLECTION_NAME)
+    collection = Collection(COLLECTION_NAME)
 
-# Check if an index exists on the 'embedding' field
 if not collection.has_index():
-    print("No index found on the 'embedding' field. Creating one now...")
-    # Using HNSW index for a good balance of performance and accuracy
-    index_params = {
-        "metric_type": "IP",  # Inner Product for similarity
-        "index_type": "HNSW",
-        "params": {"M": 8, "efConstruction": 200}
-    }
-    collection.create_index(
-        field_name="embedding",
-        index_params=index_params
-    )
-    print("Index created successfully.")
-else:
-    print("Index already exists.")
+    index_params = {"metric_type": "IP", "index_type": "HNSW", "params": {"M": 8, "efConstruction": 200}}
+    collection.create_index(field_name="embedding", index_params=index_params)
 
-# Load the collection into memory for searching
-print("Loading collection into memory...")
 collection.load()
-print("Collection loaded.")
 
-
-# --- AWS S3 Client ---
+# -----------------------
+# AWS S3
+# -----------------------
 s3_client = boto3.client(
     "s3",
     aws_access_key_id=AWS_ACCESS_KEY_ID,
@@ -108,66 +114,123 @@ s3_client = boto3.client(
     region_name=AWS_REGION,
 )
 
-# --- FastAPI App ---
-app = FastAPI(title="Semantic Search API")
-
+# -----------------------
+# Helper functions
+# -----------------------
 def chunk_text(text: str, max_words: int = 200):
-    """Splits text into chunks of a specified number of words."""
     words = text.split()
     for i in range(0, len(words), max_words):
         yield " ".join(words[i:i + max_words])
 
+# -----------------------
+# LLM Client
+# -----------------------
+class LLMClient:
+    def __init__(self):
+        self.use_openai = USE_OPENAI
+        if self.use_openai:
+            if not OPENAI_API_KEY:
+                raise RuntimeError("OPENAI_API_KEY missing")
+            self.client = OpenAI(api_key=OPENAI_API_KEY)
+            self.model = OPENAI_MODEL
+        else:
+            device_map = "auto" if HF_DEVICE == "auto" else None
+            print(f"Loading HF model: {HF_MODEL_ID}")
+            self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
+            self.model = AutoModelForCausalLM.from_pretrained(
+                HF_MODEL_ID,
+                torch_dtype=torch.float16 if torch.cuda.is_available() else None,
+                device_map=device_map,
+            )
+            self.pipe = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer)
 
+    def generate(self, prompt: str) -> str:
+        if self.use_openai:
+            resp = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "Answer only using the provided context."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=TEMPERATURE,
+                max_tokens=MAX_NEW_TOKENS,
+            )
+            return resp.choices[0].message.content.strip()
+        else:
+            out = self.pipe(
+                prompt,
+                max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=True if TEMPERATURE > 0 else False,
+                temperature=TEMPERATURE,
+                pad_token_id=self.tokenizer.eos_token_id,
+            )
+            return out[0]["generated_text"][len(prompt):].strip()
 
-@app.post("/ingest", summary="Ingest a document")
-async def ingest_document(file: UploadFile, title: str = Form(...), session_id: str = Form(...)):
-    if not S3_BUCKET:
-        raise ValueError("S3_BUCKET environment variable is not set.")
+llm = LLMClient()
 
+# -----------------------
+# Schemas
+# -----------------------
+class ChatRequest(BaseModel):
+    query: str
+    top_k: int = TOP_K_DEFAULT
+    session_id: Optional[str] = None
+
+class ChunkOut(BaseModel):
+    title: Optional[str]
+    text: str
+    score: float
+
+class ChatResponse(BaseModel):
+    answer: str
+    chunks: List[ChunkOut]
+    used_top_k: int
+
+# -----------------------
+# Endpoints
+# -----------------------
+@app.post("/ingest")
+async def ingest(file: UploadFile, title: str = Form(...), session_id: str = Form(...)):
     content_bytes = await file.read()
     file_id = str(uuid.uuid4())
     s3_key = f"documents/{file_id}_{file.filename}"
-
     s3_client.upload_fileobj(io.BytesIO(content_bytes), S3_BUCKET, s3_key)
     file_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
 
     try:
         content = content_bytes.decode("utf-8")
     except UnicodeDecodeError:
-        return JSONResponse(status_code=400, content={"message": "Failed to decode file. Please use UTF-8 text."})
+        return JSONResponse(status_code=400, content={"message": "File must be UTF-8 text."})
 
     chunks = list(chunk_text(content))
-    if not chunks:
-        return {"message": "Document is empty", "file_url": file_url}
-
-    embeddings = model.encode(chunks).tolist()
+    embeddings = embedder.encode(chunks).tolist()
 
     entities = [
-        [f"{file_id}_{i}" for i in range(len(chunks))],  # id
-        [title] * len(chunks),                           # title
-        chunks,                                          # text
-        embeddings,                                      # embedding
-        [session_id] * len(chunks),                      # session_id
+        [f"{file_id}_{i}" for i in range(len(chunks))],
+        [title] * len(chunks),
+        chunks,
+        embeddings,
+        [session_id] * len(chunks),
     ]
 
     collection.insert(entities)
     collection.flush()
 
-    return {"message": "Document ingested successfully", "file_url": file_url, "chunks_ingested": len(chunks)}
+    return {"message": "Ingested", "file_url": file_url, "chunks": len(chunks), "session_id": session_id}
 
-@app.get("/search", summary="Perform a semantic search")
-async def search(query: str, session_id: str, limit: int = 5):
-    query_embedding = model.encode([query]).tolist()
-
-    search_params = {"metric_type": "IP", "params": {"ef": 10}}
+@app.get("/search")
+async def search(query: str, limit: int = 5, session_id: Optional[str] = None):
+    query_emb = embedder.encode([query]).tolist()
+    search_params = {"metric_type": "IP", "params": {"ef": 32}}
+    expr = f'session_id == "{session_id}"' if session_id else None
 
     results = collection.search(
-        data=query_embedding,
+        data=query_emb,
         anns_field="embedding",
         param=search_params,
         limit=limit,
         output_fields=["title", "text"],
-        expr=f"session_id == \"{session_id}\""   # filter only this session's docs
+        expr=expr,
     )
 
     output = []
@@ -181,3 +244,41 @@ async def search(query: str, session_id: str, limit: int = 5):
             })
 
     return {"results": output}
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest = Body(...)):
+    q_emb = embedder.encode([req.query]).tolist()
+    search_params = {"metric_type": "IP", "params": {"ef": 32}}
+    expr = f'session_id == "{req.session_id}"' if req.session_id else None
+
+    results = collection.search(
+        data=q_emb,
+        anns_field="embedding",
+        param=search_params,
+        limit=req.top_k,
+        output_fields=["title", "text"],
+        expr=expr,
+    )
+
+    chunks: List[ChunkOut] = []
+    for hits in results:
+        for h in hits:
+            chunks.append(ChunkOut(
+                title=h.entity.get("title"),
+                text=h.entity.get("text"),
+                score=float(h.distance),
+            ))
+
+    if not chunks:
+        return ChatResponse(answer="No context available. Please ingest documents first.", chunks=[], used_top_k=req.top_k)
+
+    context = "\n\n---\n\n".join([c.text for c in chunks])
+    prompt = (
+        "Answer only using this context.\n"
+        "If not in context, say 'I don't know'.\n\n"
+        f"Context:\n{context}\n\n"
+        f"Question: {req.query}\nAnswer:"
+    )
+
+    answer = llm.generate(prompt)
+    return ChatResponse(answer=answer, chunks=chunks, used_top_k=req.top_k)
