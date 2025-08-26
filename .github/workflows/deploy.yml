@@ -2,18 +2,41 @@ name: CI/CD Deploy to EC2
 
 on:
   push:
-    branches: ["master"]   # adjust if your branch is different
+    branches: ["phase-02", "main"]   # Deploy on push to these branches
 
 jobs:
   deploy:
-    runs-on: self-hosted   # because EC2 has the runner
+    runs-on: self-hosted   # EC2 runner
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build and restart containers
+      - name: Create .env file
         run: |
-          cd /home/ubuntu/semantic-search
-          git pull origin main
-          docker compose down
-          docker compose up -d --build
+          echo "USE_ZILLIZ=true" > .env
+          echo "ZILLIZ_URI=${{ secrets.ZILLIZ_URI }}" >> .env
+          echo "ZILLIZ_API_KEY=${{ secrets.ZILLIZ_API_KEY }}" >> .env
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> .env
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> .env
+          echo "AWS_REGION=ap-south-1" >> .env
+          echo "S3_BUCKET=${{ secrets.S3_BUCKET }}" >> .env
+          echo "USE_OPENAI=false" >> .env
+          echo "HF_MODEL_ID=google/flan-t5-base" >> .env
+
+      - name: Stop existing containers
+        run: |
+          docker-compose down || true
+
+      - name: Clean up Docker
+        run: |
+          docker system prune -f
+
+      - name: Build and deploy
+        run: |
+          docker-compose up -d --build
+
+      - name: Verify deployment
+        run: |
+          sleep 30
+          curl -f http://localhost:8000/docs || exit 1
+          echo "✅ Deployment successful!"
