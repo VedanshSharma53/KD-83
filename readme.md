@@ -22,43 +22,7 @@ A complete **semantic search and RAG (Retrieval-Augmented Generation) system** w
 
 ## 🔄 System Architecture Flow
 
-```
-                    User Input
-                        |
-                        ↓
-              ┌─────────────────────┐
-              │  Classification     │
-              │     Agent           │
-              └─────────────────────┘
-                        |
-                        ↓
-              ┌─────────────────────┐
-              │   Route Decision    │
-              └─────────────────────┘
-                   /    |    \
-                  /     |     \
-                 ↓      ↓      ↓
-        ┌─────────────┐ ┌────────────┐ ┌─────────────┐
-        │  Document   │ │   Search   │ │ Chat/RAG    │
-        │   Upload    │ │   Query    │ │   Query     │
-        └─────────────┘ └────────────┘ └─────────────┘
-                 |           |              |
-                 ↓           ↓              ↓
-        ┌─────────────┐ ┌────────────┐ ┌─────────────┐
-        │File Processing│ │Vector Search│ │RAG Agent   │
-        │   Agent     │ │   Agent    │ │            │
-        └─────────────┘ └────────────┘ └─────────────┘
-                 \           |              /
-                  \          |             /
-                   ↓         ↓            ↓
-              ┌─────────────────────────────────┐
-              │        Response Agent           │
-              │   (Aggregates all results)     │
-              └─────────────────────────────────┘
-                        |
-                        ↓
-                    Response
-```
+![](flow.png)
 
 ### Agent Responsibilities:
 
