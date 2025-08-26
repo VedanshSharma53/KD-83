@@ -1,104 +1,113 @@
-# 📄 Semantic Search Engine (FastAPI + Zilliz/Milvus + AWS S3 + Streamlit)
+# 📄 Semantic Search & RAG Chatbot
 
-A production-ready **semantic search engine** with:
-- **FastAPI** backend for document ingestion & search  
-- **Sentence-Transformers** (`all-MiniLM-L6-v2`) for embeddings  
-- **Zilliz Cloud (managed Milvus)** or self-hosted **Milvus on AWS EC2** for vector DB  
-- **AWS S3** to store original documents  
-- **Streamlit UI** for uploading & searching documents  
-
----
+A complete **semantic search and RAG (Retrieval-Augmented Generation) system** with document upload, intelligent search, and AI-powered chat capabilities.
 
 ## 🚀 Features
-- Upload documents → automatically chunked (~200–300 words each)  
-- Store embeddings + metadata in Zilliz/Milvus  
-- Store original file in AWS S3 → results return S3 link  
-- Search across **only the documents uploaded in your session**  
-- Streamlit UI for upload & search  
 
----
+- **📄 Document Upload**: Upload PDF, DOCX, TXT, and MD files
+- **🔍 Semantic Search**: Find relevant content using AI-powered embeddings
+- **🤖 RAG Chatbot**: Chat with your uploaded documents using LLM
+- **☁️ Cloud-Ready**: Deployed with Docker on AWS EC2
+- **� Session-Based**: Each user session keeps documents separate
 
-## 📦 Project Structure
+## 🛠️ Tech Stack
+
+- **Backend**: FastAPI + Python
+- **Frontend**: Streamlit
+- **Vector Database**: Zilliz Cloud (Managed Milvus)
+- **Storage**: AWS S3
+- **Embeddings**: Sentence Transformers (all-MiniLM-L6-v2)
+- **LLM**: OpenAI GPT or Hugging Face Transformers
+- **Deployment**: Docker + Docker Compose
+
+## 🔄 System Architecture Flow
+
+![](flow.png)
+
+### Agent Responsibilities:
+
+**🎯 Classification Agent**
+- Analyzes user input to determine intent
+- Routes requests to appropriate specialized agents
+- Handles: Upload requests, search queries, chat questions
+
+**📄 File Processing Agent**
+- Extracts text from various document formats (PDF, DOCX, TXT, MD)
+- Splits documents into semantic chunks (~200 words)
+- Generates 384-dimensional embeddings using Sentence Transformers
+- Stores original files in AWS S3 and vectors in Milvus
+
+**🔍 Vector Search Agent**
+- Converts search queries to vector representations
+- Performs similarity search using Inner Product metric
+- Filters results by user session for data isolation
+- Returns ranked document chunks with similarity scores
+
+**🤖 RAG Agent**
+- Retrieves relevant document chunks for context
+- Constructs prompts combining user questions with retrieved context
+- Interfaces with LLM (OpenAI GPT or HuggingFace Transformers)
+- Generates answers constrained to provided document context
+
+**📤 Response Agent**
+- Aggregates outputs from all specialized agents
+- Formats responses based on request type
+- Ensures consistent response structure across different operations
+
+## � Project Structure
 ```
 .
-├─ app/
-│  └─ main.py          # FastAPI backend
-├─ streamlit_app.py    # Streamlit frontend
-├─ requirements.txt    # Python dependencies
-├─ .env.example        # Example environment config
-└─ README.md
+├── app/
+│   └── main.py              # FastAPI backend
+├── streamlit_app.py         # Streamlit frontend
+├── requirements.txt         # Python dependencies
+├── Dockerfile.backend       # Backend container
+├── Dockerfile.frontend      # Frontend container
+├── docker-compose.yml       # Multi-container setup
+├── .env                     # Environment variables
+└── README.md
 ```
 
----
+## ⚡ Quick Start
 
-## ⚙️ Prerequisites
-- Python 3.10+  
-- AWS account with:
-  - S3 bucket created (e.g. `semantic-docs-bucket`)  
-  - IAM user with `s3:PutObject` + `s3:GetObject` permissions  
-- Either:
-  - **Zilliz Cloud** cluster (recommended)  
-  - Or **EC2 instance** running Milvus in Docker  
+### 1. Clone Repository
+```bash
+git clone https://github.com/VedanshSharma53/KD-83.git
+cd KD-83
+```
 
----
+### 2. Set Environment Variables
+Create `.env` file with:
+```env
+# Vector Database
+USE_ZILLIZ=true
+ZILLIZ_URI=your_zilliz_uri
+ZILLIZ_API_KEY=your_zilliz_api_key
 
-## 🔑 Environment Variables (`.env`)
-Copy `.env.example` → `.env` and fill in:
-
-```ini
-# --- Toggle ---
-USE_ZILLIZ=true          # set false if using self-hosted Milvus
-
-# --- Zilliz Cloud (if USE_ZILLIZ=true) ---
-ZILLIZ_URI="grpc+ssl://xxx.api.gcp-zillizcloud.com:19530"
-ZILLIZ_API_KEY="your_zilliz_api_key"
-
-# --- Local Milvus (if USE_ZILLIZ=false) ---
-MILVUS_HOST=localhost
-MILVUS_PORT=19530
-
-# --- AWS S3 ---
+# AWS S3
 AWS_ACCESS_KEY_ID=your_aws_key
 AWS_SECRET_ACCESS_KEY=your_aws_secret
 AWS_REGION=ap-south-1
-S3_BUCKET=semantic-docs-bucket
+S3_BUCKET=your_bucket_name
 
-# --- Common ---
-COLLECTION_NAME=documents
+# LLM (Choose one)
+USE_OPENAI=false
+HF_MODEL_ID=google/flan-t5-base
+
+# Or use OpenAI
+# USE_OPENAI=true
+# OPENAI_API_KEY=your_openai_key
 ```
 
----
-
-## 🖥️ Backend Setup (FastAPI)
-
-### 1. Create virtual environment
+### 3. Deploy with Docker
 ```bash
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-.venv\Scripts\activate      # Windows
+docker-compose up -d --build
 ```
 
-### 2. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Run FastAPI
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Backend runs at `http://localhost:8000`  
-Swagger UI: `http://localhost:8000/docs`
-
----
-
-## 🎨 Frontend Setup (Streamlit)
-
-Run:
-```bash
-streamlit run streamlit_app.py
-```
+### 4. Access Applications
+- **Streamlit UI**: `http://localhost:8501`
+- **FastAPI Backend**: `http://localhost:8000`
+- **API Documentation**: `http://localhost:8000/docs`
 
 Opens at `http://localhost:8501`.
 
@@ -123,51 +132,158 @@ Each Streamlit session has its own **session_id**, so you only search docs uploa
 ### 2. Security Group
 - Open ports:
   - `22` (SSH)
-  - `8000` (FastAPI backend)
-  - `8501` (Streamlit frontend)
-- Restrict access to your IP for security  
+  ## 💻 Local Development
 
-### 3. Install dependencies on EC2
+### 1. Install Dependencies
 ```bash
-sudo apt update && sudo apt install -y python3-pip python3-venv git docker.io docker-compose
-```
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# or
+.venv\Scripts\activate     # Windows
 
-### 4. Clone project
-```bash
-git clone https://github.com/yourusername/semantic-search.git
-cd semantic-search
-```
-
-### 5. Setup Python
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 6. Setup Milvus
-- **If using Zilliz** → skip this step  
-- **If self-hosting Milvus**:
-  ```bash
-  mkdir milvus && cd milvus
-  curl -sLO https://raw.githubusercontent.com/milvus-io/milvus/master/deployments/docker/compose/standalone/docker-compose.yml
-  sudo docker compose up -d
-  ```
-  Milvus listens on port 19530.
-
-### 7. Run backend
+### 2. Run Backend (FastAPI)
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 8. Run frontend
+### 3. Run Frontend (Streamlit)
 ```bash
-streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+streamlit run streamlit_app.py --server.port 8501
 ```
 
-Now accessible via:  
-- Backend → `http://<ec2-public-ip>:8000/docs`  
-- Streamlit → `http://<ec2-public-ip>:8501`  
+### 4. Access Applications
+- Backend: `http://localhost:8000`
+- Frontend: `http://localhost:8501`
+- API Docs: `http://localhost:8000/docs`
+
+## ☁️ AWS EC2 Deployment
+
+### 1. Launch EC2 Instance
+- **AMI**: Ubuntu 22.04 LTS
+- **Instance Type**: t3.large (recommended)
+- **Storage**: 30GB EBS volume
+- **Security Group**: Allow ports 22, 8000, 8501
+
+### 2. Install Docker
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install docker.io docker-compose git -y
+sudo systemctl start docker
+sudo usermod -aG docker ubuntu
+```
+
+### 3. Deploy Application
+```bash
+git clone https://github.com/VedanshSharma53/KD-83.git
+cd KD-83
+git checkout phase-02
+
+# Create .env file with your credentials
+nano .env
+
+# Build and run
+docker-compose up -d --build
+```
+
+### 4. Access Your App
+- **Streamlit**: `http://your-ec2-ip:8501`
+- **FastAPI**: `http://your-ec2-ip:8000`
+- **API Docs**: `http://your-ec2-ip:8000/docs`
+
+## 📋 API Endpoints
+
+### Document Management
+- `POST /ingest` - Upload and process documents
+- `GET /search` - Search documents by query
+- `POST /chat` - Chat with your documents using RAG
+
+### Example Usage
+```python
+import requests
+
+# Upload document
+files = {"file": open("document.pdf", "rb")}
+data = {"title": "My Document", "session_id": "user123"}
+response = requests.post("http://localhost:8000/ingest", files=files, data=data)
+
+# Search documents
+params = {"query": "machine learning", "limit": 5, "session_id": "user123"}
+response = requests.get("http://localhost:8000/search", params=params)
+
+# Chat with documents
+payload = {"query": "What is the main topic?", "session_id": "user123"}
+response = requests.post("http://localhost:8000/chat", json=payload)
+```
+
+## 🔧 Configuration
+
+### Environment Variables
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `USE_ZILLIZ` | Use Zilliz Cloud or local Milvus | `true` |
+| `ZILLIZ_URI` | Zilliz cluster endpoint | `https://...` |
+| `ZILLIZ_API_KEY` | Zilliz API key | `your_key` |
+| `AWS_ACCESS_KEY_ID` | AWS access key | `AKIA...` |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key | `your_secret` |
+| `S3_BUCKET` | S3 bucket name | `my-docs-bucket` |
+| `USE_OPENAI` | Use OpenAI or HuggingFace | `false` |
+| `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
+| `HF_MODEL_ID` | HuggingFace model | `google/flan-t5-base` |
+
+## 🧪 Testing
+
+### Upload Test Document
+1. Go to `http://localhost:8501`
+2. Click "Upload Document" tab
+3. Upload a PDF/DOCX/TXT file
+4. Wait for processing confirmation
+
+### Search Test
+1. Go to "Search" tab
+2. Enter search query: "your topic"
+3. View relevant document chunks
+
+### Chat Test
+1. Go to "Chatbot" tab
+2. Ask: "What is this document about?"
+3. Get AI-generated response based on your documents
+
+## 🔍 Troubleshooting
+
+### Common Issues
+- **Port already in use**: Kill process with `sudo lsof -ti:8000 | xargs kill -9`
+- **Docker build fails**: Increase EBS volume size to 30GB
+- **No search results**: Check if documents uploaded in same session
+- **LLM errors**: Verify OpenAI API key or HuggingFace model access
+
+### Check Logs
+```bash
+# Docker logs
+docker-compose logs -f
+
+# Specific service logs
+docker-compose logs backend
+docker-compose logs frontend
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/new-feature`)
+3. Commit your changes (`git commit -am 'Add new feature'`)
+4. Push to the branch (`git push origin feature/new-feature`)
+5. Create a Pull Request
+
+## 📞 Support
+
+For questions or support, please open an issue on GitHub or contact [your-email@example.com](mailto:your-email@example.com).  
 
 ---
 
