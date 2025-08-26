@@ -8,3 +8,9 @@ numpy
 pypdf
 python-docx
 python-multipart
+python-dotenv
+openai
+torch
+transformers
+requests
+streamlit

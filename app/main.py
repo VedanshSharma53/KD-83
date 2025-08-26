@@ -19,7 +19,13 @@ if USE_OPENAI:
     from openai import OpenAI
 else:
     import torch
-    from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+    from transformers import (
+        AutoTokenizer,
+        AutoModelForCausalLM,
+        AutoModelForSeq2SeqLM,
+        AutoConfig,
+        pipeline,
+    )
 
 # -----------------------
 # Environment / Config
@@ -43,9 +49,9 @@ AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
 S3_BUCKET = os.getenv("S3_BUCKET")
 
 # LLM
-HF_MODEL_ID = os.getenv("HF_MODEL_ID", "meta-llama/Meta-Llama-3-8B-Instruct")
+HF_MODEL_ID = os.getenv("HF_MODEL_ID", "google/flan-t5-base")  # default: fast model
 HF_DEVICE = os.getenv("HF_DEVICE", "auto")
-MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "512"))
+MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "256"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -133,19 +139,28 @@ class LLMClient:
                 raise RuntimeError("OPENAI_API_KEY missing")
             self.client = OpenAI(api_key=OPENAI_API_KEY)
             self.model = OPENAI_MODEL
+            self.mode = "openai"
+            print(f"Using OpenAI model: {self.model}")
         else:
-            device_map = "auto" if HF_DEVICE == "auto" else None
             print(f"Loading HF model: {HF_MODEL_ID}")
+            config = AutoConfig.from_pretrained(HF_MODEL_ID)
             self.tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
-            self.model = AutoModelForCausalLM.from_pretrained(
-                HF_MODEL_ID,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else None,
-                device_map=device_map,
-            )
-            self.pipe = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer)
+
+            if config.is_encoder_decoder:  # seq2seq (e.g., T5, BART)
+                self.model = AutoModelForSeq2SeqLM.from_pretrained(HF_MODEL_ID)
+                self.pipe = pipeline("text2text-generation", model=self.model, tokenizer=self.tokenizer)
+                self.mode = "seq2seq"
+            else:  # causal LM (e.g., LLaMA, Mistral, GPT)
+                self.model = AutoModelForCausalLM.from_pretrained(
+                    HF_MODEL_ID,
+                    torch_dtype=torch.float16 if torch.cuda.is_available() else None,
+                    device_map="auto" if HF_DEVICE == "auto" else None,
+                )
+                self.pipe = pipeline("text-generation", model=self.model, tokenizer=self.tokenizer)
+                self.mode = "causal"
 
     def generate(self, prompt: str) -> str:
-        if self.use_openai:
+        if self.mode == "openai":
             resp = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -156,15 +171,16 @@ class LLMClient:
                 max_tokens=MAX_NEW_TOKENS,
             )
             return resp.choices[0].message.content.strip()
-        else:
-            out = self.pipe(
-                prompt,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=True if TEMPERATURE > 0 else False,
-                temperature=TEMPERATURE,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
-            return out[0]["generated_text"][len(prompt):].strip()
+
+        out = self.pipe(
+            prompt,
+            max_new_tokens=MAX_NEW_TOKENS,
+            do_sample=True if TEMPERATURE > 0 else False,
+            temperature=TEMPERATURE,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        # HuggingFace pipelines return different keys for seq2seq vs causal
+        return out[0].get("generated_text") or out[0].get("translation_text")
 
 llm = LLMClient()
 
