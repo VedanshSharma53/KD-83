@@ -1,0 +1,19 @@
+name: CI/CD Deploy to EC2
+
+on:
+  push:
+    branches: ["master"]   # adjust if your branch is different
+
+jobs:
+  deploy:
+    runs-on: self-hosted   # because EC2 has the runner
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Build and restart containers
+        run: |
+          cd /home/ubuntu/semantic-search
+          git pull origin main
+          docker compose down
+          docker compose up -d --build
